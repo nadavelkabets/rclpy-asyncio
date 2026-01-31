@@ -1,97 +1,13 @@
 import asyncio
-from contextlib import asynccontextmanager
 
-class AsyncioSubscription:
-    def __aiter__(self):
-        return self
+from rclpy.node import Node
 
-    async def __anext__(self):
-        if self._destroyed:
-            raise RuntimeError("Unable to get the next message: subscription destroyed")
-        if self._closing:
-            raise StopAsyncIteration
-
-        return await self._receive_message()
-
-    def close(self):
-        """Signal the subscription to stop iteration gracefully."""
-        self._closing = True
-    
-    def __enter__(self):
-        self._handler.set_on_new_message_callback()
-        return self
-
-    def __exit__(self, *_exc):
-        self._handler.clear_on_new_message_callback()
-
-class AsyncioService:
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self._destroyed:
-            raise RuntimeError("Unable to get the next request: service destroyed")
-        if self._closing:
-            raise StopAsyncIteration
-
-        return await self._receive_request()  # returns (request, header)
-
-    def close(self):
-        """Signal the service to stop accepting new requests gracefully."""
-        self._closing = True
-
-    def __enter__(self):
-        self._handler.set_on_new_request_callback()
-        return self
-
-    def __exit__(self, *_exc):
-        self._handler.clear_on_new_request_callback()
-
-    def send_response(self, response, header):
-        self._handler.service_send_response(response, header)
+from .subscription import AsyncioSubscription
+from .service import AsyncioService
+from .client import AsyncioClient
 
 
-class AsyncioClient:
-    def __init__(self):
-        self._pending_requests = {}  # sequence_number -> Future
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self._destroyed:
-            raise RuntimeError("Unable to get the next response: client destroyed")
-        if self._closing:
-            raise StopAsyncIteration
-
-        return await self._receive_response()  # returns (response, sequence_number)
-
-    def close(self):
-        """Signal the client to stop receiving responses gracefully."""
-        self._closing = True
-
-    def __enter__(self):
-        self._handler.set_on_new_response_callback()
-        return self
-
-    def __exit__(self, *_exc):
-        self._handler.clear_on_new_response_callback()
-
-    async def call(self, request):
-        """Send request and await response."""
-        if self._destroyed:
-            raise RuntimeError("Unable to call service: client destroyed")
-
-        future = asyncio.get_running_loop().create_future()
-        sequence_number = self._handler.send_request(request)
-        self._pending_requests[sequence_number] = future
-        try:
-            return await future
-        finally:
-            self._pending_requests.pop(sequence_number, None)
-
-
-class AsyncioNode:
+class AsyncioNode(Node):
     async def run(self):
         async with asyncio.TaskGroup() as tg:
             self._tg = tg
@@ -195,22 +111,3 @@ class AsyncioNode:
 
         client.destroy()
         self._clients.remove(client)
-
-async def main():
-    async with AsyncioNode("listener") as node:
-        node.create_subscription("/imu", Imu, on_imu)
-        node.create_service("/get_pose", GetPose, handle_get_pose)
-        client = node.create_client("/other_service", OtherService)
-        await node.run()
-
-
-async def handle_get_pose(request, response):
-    response.x = 1.0
-    response.y = 2.0
-    return response
-
-
-async def on_imu(msg):
-    # Example: call a service from within a subscription callback
-    response = await client.call(OtherService.Request())
-    print(response)
