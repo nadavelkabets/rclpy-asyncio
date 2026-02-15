@@ -56,12 +56,21 @@ class AsyncioNode(Node):
         await self.close()
 
     async def close(self):
-        for sub in self._subscriptions:
-            self.close_subscription(sub)
-        for srv in self._services:
-            self.close_service(srv)
-        for client in self._clients:
-            self.close_client(client)
+        self._context.untrack_node(self)
+        # Drop extra reference to parameter event publisher.
+        # It will be destroyed with other publishers below.
+        self._parameter_event_publisher = None
+        
+        async with asyncio.TaskGroup() as tg:
+            for sub in self._subscriptions:
+                tg.create_task(self.close_subscription, sub)
+            for srv in self._services:
+                tg.create_task(self.close_service, srv)
+            for client in self._clients:
+                tg.create_task(self.close_client, client)
+
+        self._type_description_service.destroy()
+        self.handle.destroy_when_not_in_use()
 
     async def run(self):
         try:
@@ -101,17 +110,13 @@ class AsyncioNode(Node):
 
     async def _run_client(self, client: AsyncioClient):
         """Node implements the client response loop."""
-        try:
-            with client:
-                async for response, sequence_number in client:
-                    future = client._pending_requests.pop(sequence_number, None)
-                    if future:
-                        future.set_result(response)
-        finally:
-            # Cancel all pending futures if loop exits unexpectedly
-            for future in client._pending_requests.values():
-                future.cancel()
-            client._pending_requests.clear()
+        async for response, sequence_number in client:
+            try:
+                future = client.get_pending_request(sequence_number)
+            except KeyError:
+                continue
+                
+            future.set_result(response)
 
     def create_subscription(self, *args):
         sub = AsyncioSubscription(self)
@@ -138,7 +143,7 @@ class AsyncioNode(Node):
         return client
 
     # TODO: do we want a graceful=False flag that cancels all pending callbacks?
-    async def close_subscription(self, sub):
+    async def close_subscription(self, sub: AsyncioSubscription):
         """
         Stop processing new messages and wait for existing callbacks to complete.
         """
@@ -146,10 +151,11 @@ class AsyncioNode(Node):
         sub.close()
         await task
 
-        sub.destroy()
+        sub.__exit__()
         self._subscriptions.remove(sub)
 
-    async def close_service(self, srv):
+    # TODO: do we want a graceful=False flag that cancels all in progress requests?
+    async def close_service(self, srv: AsyncioService):
         """
         Stop processing new requests and wait for existing callbacks to complete.
         """
@@ -157,10 +163,11 @@ class AsyncioNode(Node):
         srv.close()
         await task
 
-        srv.destroy()
+        srv.__exit__()
         self._services.remove(srv)
 
-    async def close_client(self, client):
+    # TODO: should we cancel all pending calls or wait for responses (with timeout?)
+    async def close_client(self, client: AsyncioClient):
         """
         Stop allowing new calls and cancel all pending calls.
         """
@@ -168,5 +175,5 @@ class AsyncioNode(Node):
         client.close()
         await task
 
-        client.destroy()
+        client.__exit__()
         self._clients.remove(client)

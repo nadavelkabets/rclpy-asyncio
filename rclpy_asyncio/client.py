@@ -23,11 +23,17 @@ class AsyncioClient(Client):
         self._closing = True
 
     def __enter__(self):
-        self._handler.set_on_new_response_callback()
+        if self._closing:
+            raise RuntimeError("Unable to enter a closed service")
+        
         return self
 
-    def __exit__(self, *_exc):
-        self._handler.clear_on_new_response_callback()
+    def __exit__(self, *exc):
+        self.handle.clear_on_new_response_callback()
+        for future in self._pending_requests.values():
+            future.cancel()
+        self._pending_requests.clear()
+        super().__exit__(*exc)
 
     async def call(self, request):
         """Send request and await response."""

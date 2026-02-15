@@ -1,20 +1,23 @@
 import asyncio
+from functools import partial
 
 async def main():
     async with AsyncioNode("listener") as node:
-        node.create_subscription("/imu", Imu, on_imu)
-        node.create_service("/get_pose", GetPose, handle_get_pose)
         client = node.create_client("/other_service", OtherService)
+        node.create_subscription("/imu", Imu, partial(on_imu, client)
+        node.create_service("/get_pose", GetPose, handle_get_pose)
+
         await node.run()
 
 
-async def handle_get_pose(request, response):
+async def handle_get_pose(_request, response):
     response.x = 1.0
     response.y = 2.0
     return response
 
 
-async def on_imu(msg):
+async def on_imu(client, msg):
     # Example: call a service from within a subscription callback
-    response = await client.call(OtherService.Request())
+    async with asyncio.Timeout(5):
+        response = await client.call(OtherService.Request())
     print(response)
