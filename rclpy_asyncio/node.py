@@ -62,12 +62,12 @@ class AsyncioNode(Node):
         self._parameter_event_publisher = None
         
         async with asyncio.TaskGroup() as tg:
-            for sub in self._subscriptions:
-                tg.create_task(self.close_subscription, sub)
-            for srv in self._services:
-                tg.create_task(self.close_service, srv)
-            for client in self._clients:
-                tg.create_task(self.close_client, client)
+            for sub in list(self._subscriptions):
+                tg.create_task(self.close_subscription(sub))
+            for srv in list(self._services):
+                tg.create_task(self.close_service(srv))
+            for client in list(self._clients):
+                tg.create_task(self.close_client(client))
 
         self._type_description_service.destroy()
         self.handle.destroy_when_not_in_use()
@@ -142,38 +142,23 @@ class AsyncioNode(Node):
 
         return client
 
-    # TODO: do we want a graceful=False flag that cancels all pending callbacks?
     async def close_subscription(self, sub: AsyncioSubscription):
-        """
-        Stop processing new messages and wait for existing callbacks to complete.
-        """
+        """Stop processing new messages and wait for existing callbacks to complete."""
         task = self._runners.pop(sub)
-        sub.close()
+        task.cancel()
         await task
-
-        sub.__exit__()
         self._subscriptions.remove(sub)
 
-    # TODO: do we want a graceful=False flag that cancels all in progress requests?
     async def close_service(self, srv: AsyncioService):
-        """
-        Stop processing new requests and wait for existing callbacks to complete.
-        """
+        """Stop processing new requests and wait for existing callbacks to complete."""
         task = self._runners.pop(srv)
-        srv.close()
+        task.cancel()
         await task
-
-        srv.__exit__()
         self._services.remove(srv)
 
-    # TODO: should we cancel all pending calls or wait for responses (with timeout?)
     async def close_client(self, client: AsyncioClient):
-        """
-        Stop allowing new calls and cancel all pending calls.
-        """
+        """Stop allowing new calls and cancel all pending calls."""
         task = self._runners.pop(client)
-        client.close()
+        task.cancel()
         await task
-
-        client.__exit__()
         self._clients.remove(client)
