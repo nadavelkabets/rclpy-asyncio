@@ -1,10 +1,12 @@
 import asyncio
 from typing import Optional, List, Union, Any, Dict
 
-from rclpy.node import Node
+import _rclpy
+from rclpy.node import Node, check_is_valid_msg_type, check_is_valid_srv_type
 from rclpy.context import Context
-from rclpy.qos import QoSProfile, qos_profile_rosout_default
+from rclpy.qos import QoSProfile, qos_profile_rosout_default, qos_profile_services_default
 from rclpy.parameter import Parameter
+from rclpy.subscription import SubscriptionEventCallbacks
 
 from .subscription import AsyncioSubscription
 from .service import AsyncioService
@@ -110,55 +112,91 @@ class AsyncioNode(Node):
 
     async def _run_client(self, client: AsyncioClient):
         """Node implements the client response loop."""
-        async for response, sequence_number in client:
-            try:
-                future = client.get_pending_request(sequence_number)
-            except KeyError:
-                continue
-                
-            future.set_result(response)
+        with client:
+            async for response, sequence_number in client:
+                try:
+                    future = client.get_pending_request(sequence_number)
+                except KeyError:
+                    continue
 
-    def create_subscription(self, *args):
-        sub = AsyncioSubscription(self)
+                future.set_result(response)
+
+    def create_subscription(
+        self, msg_type, topic, callback, qos_profile, *, raw=False,
+        event_callbacks=None,
+    ):
+        qos_profile = self._validate_qos_or_depth_parameter(qos_profile)
+        check_is_valid_msg_type(msg_type)
+        with self.handle:
+            subscription_impl = _rclpy.Subscription(
+                self.handle, msg_type, topic,
+                qos_profile.get_c_qos_profile(), None)
+        sub = AsyncioSubscription(
+            subscription_impl, msg_type, topic, callback,
+            self.default_callback_group, qos_profile, raw,
+            event_callbacks or SubscriptionEventCallbacks())
         self._subscriptions.append(sub)
         if self._tg:
-            self._tg.create_task(self._run_subscription(sub))
-
+            task = self._tg.create_task(self._run_subscription(sub))
+            self._runners[sub] = task
         return sub
 
-    def create_service(self, service_name, service_type, callback):
-        srv = AsyncioService(self, service_name, service_type, callback)
+    def create_service(
+        self, srv_type, srv_name, callback, *,
+        qos_profile=qos_profile_services_default,
+    ):
+        check_is_valid_srv_type(srv_type)
+        with self.handle:
+            service_impl = _rclpy.Service(
+                self.handle, srv_type, srv_name,
+                qos_profile.get_c_qos_profile())
+        srv = AsyncioService(
+            service_impl, srv_type, srv_name, callback,
+            self.default_callback_group, qos_profile)
         self._services.append(srv)
         if self._tg:
-            self._tg.create_task(self._run_service(srv))
-            
+            task = self._tg.create_task(self._run_service(srv))
+            self._runners[srv] = task
         return srv
 
-    def create_client(self, service_name, service_type):
-        client = AsyncioClient(self, service_name, service_type)
+    def create_client(
+        self, srv_type, srv_name, *,
+        qos_profile=qos_profile_services_default,
+    ):
+        check_is_valid_srv_type(srv_type)
+        with self.handle:
+            client_impl = _rclpy.Client(
+                self.handle, srv_type, srv_name,
+                qos_profile.get_c_qos_profile())
+        client = AsyncioClient(
+            self.context, client_impl, srv_type, srv_name,
+            qos_profile, self.default_callback_group)
         self._clients.append(client)
         if self._tg:
-            self._tg.create_task(self._run_client(client))
-
+            task = self._tg.create_task(self._run_client(client))
+            self._runners[client] = task
         return client
 
     async def close_subscription(self, sub: AsyncioSubscription):
         """Stop processing new messages and wait for existing callbacks to complete."""
-        task = self._runners.pop(sub)
-        task.cancel()
-        await task
+        task = self._runners.pop(sub, None)
+        if task is not None:
+            task.cancel()
+            await task
         self._subscriptions.remove(sub)
 
     async def close_service(self, srv: AsyncioService):
         """Stop processing new requests and wait for existing callbacks to complete."""
-        task = self._runners.pop(srv)
-        task.cancel()
-        await task
+        task = self._runners.pop(srv, None)
+        if task is not None:
+            task.cancel()
+            await task
         self._services.remove(srv)
 
     async def close_client(self, client: AsyncioClient):
         """Stop allowing new calls and cancel all pending calls."""
-        task = self._runners.pop(client)
-        task.cancel()
-        await task
+        task = self._runners.pop(client, None)
+        if task is not None:
+            task.cancel()
+            await task
         self._clients.remove(client)

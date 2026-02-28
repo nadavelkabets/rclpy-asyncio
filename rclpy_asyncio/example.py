@@ -4,7 +4,7 @@ from functools import partial
 async def main():
     async with AsyncioNode("listener") as node:
         client = node.create_client("/other_service", OtherService)
-        node.create_subscription("/imu", Imu, partial(on_imu, client)
+        node.create_subscription("/imu", Imu, partial(on_imu, client))
         node.create_service("/get_pose", GetPose, handle_get_pose)
 
         await node.run()
