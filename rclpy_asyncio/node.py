@@ -67,13 +67,12 @@ class AsyncioNode(Node):
         tg = self._tg
         self._tg = None
         await tg.__aexit__(exc_type, exc_val, exc_tb)
+        self._context.untrack_node(self)
+        self._parameter_event_publisher = None
+        self._type_description_service.destroy()
+        self.handle.destroy_when_not_in_use()
 
     async def close(self):
-        self._context.untrack_node(self)
-        # Drop extra reference to parameter event publisher.
-        # It will be destroyed with other publishers below.
-        self._parameter_event_publisher = None
-
         async with asyncio.TaskGroup() as tg:
             for sub in list(self._subscriptions):
                 tg.create_task(self.close_subscription(sub))
@@ -81,9 +80,6 @@ class AsyncioNode(Node):
                 tg.create_task(self.close_service(srv))
             for client in list(self._clients):
                 tg.create_task(self.close_client(client))
-
-        self._type_description_service.destroy()
-        self.handle.destroy_when_not_in_use()
 
     # TODO: do we want a concurrent=False flag that awaits the callback?
     # TODO: do we want to utilize asyncio's eager_start on 3.12+?
