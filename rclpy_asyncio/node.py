@@ -102,6 +102,7 @@ class AsyncioNode(Node):
         try:
             async with asyncio.TaskGroup() as tg:
                 while True:
+                    # TODO: share code with executors.py _take_subscription
                     msg_and_info = subscription.handle.take_message(
                         subscription.msg_type, subscription.raw)
                     if msg_and_info is not None:
@@ -133,6 +134,7 @@ class AsyncioNode(Node):
         try:
             async with asyncio.TaskGroup() as tg:
                 while True:
+                    # TODO: share code with executors.py _take_service
                     request_and_header = service.handle.service_take_request(
                         service.srv_type.Request)
                     if request_and_header != (None, None):
@@ -169,6 +171,7 @@ class AsyncioNode(Node):
         client.handle.set_on_new_response_callback(_on_new_response)
         try:
             while True:
+                # TODO: share code with executors.py _take_client
                 header_and_response = client.handle.take_response(
                     client.srv_type.Response)
                 if header_and_response != (None, None):
@@ -225,6 +228,7 @@ class AsyncioNode(Node):
     ) -> Client[SrvRequestT, SrvResponseT]:
         client = super().create_client(srv_type, srv_name, **kwargs)
 
+        # TODO: replace the monkeypatch with AsyncioClient class
         async def call(request: SrvRequestT) -> SrvResponseT:
             future: asyncio.Future[SrvResponseT] = asyncio.get_running_loop().create_future()
             sequence_number = client.handle.send_request(request)
