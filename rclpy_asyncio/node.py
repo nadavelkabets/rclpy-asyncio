@@ -54,10 +54,23 @@ class AsyncioNode(Node):
         )
 
     async def __aenter__(self):
+        tg = asyncio.TaskGroup()
+        self._tg = await tg.__aenter__()
+        for sub in self._subscriptions:
+            task = self._tg.create_task(self._run_subscription(sub))
+            self._runners[sub] = task
+        for srv in self._services:
+            task = self._tg.create_task(self._run_service(srv))
+            self._runners[srv] = task
+        for client in self._clients:
+            task = self._tg.create_task(self._run_client(client))
+            self._runners[client] = task
         return self
 
-    async def __aexit__(self, *_exc):
-        await self.close()
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        tg = self._tg
+        self._tg = None
+        await tg.__aexit__(exc_type, exc_val, exc_tb)
 
     async def close(self):
         self._context.untrack_node(self)
@@ -75,22 +88,6 @@ class AsyncioNode(Node):
 
         self._type_description_service.destroy()
         self.handle.destroy_when_not_in_use()
-
-    async def run(self):
-        try:
-            async with asyncio.TaskGroup() as tg:
-                self._tg = tg
-                for sub in self._subscriptions:
-                    task = tg.create_task(self._run_subscription(sub))
-                    self._runners[sub] = task
-                for srv in self._services:
-                    task = tg.create_task(self._run_service(srv))
-                    self._runners[srv] = task
-                for client in self._clients:
-                    task = tg.create_task(self._run_client(client))
-                    self._runners[client] = task
-        finally:
-            self._tg = None
 
     # TODO: do we want a concurrent=False flag that awaits the callback?
     # TODO: do we want to utilize asyncio's eager_start on 3.12+?

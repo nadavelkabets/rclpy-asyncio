@@ -7,8 +7,6 @@ async def main():
         node.create_subscription("/imu", Imu, partial(on_imu, client))
         node.create_service("/get_pose", GetPose, handle_get_pose)
 
-        await node.run()
-
 
 async def handle_get_pose(_request, response):
     response.x = 1.0

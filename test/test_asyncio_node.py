@@ -17,8 +17,8 @@ TEST_QOS = QoSProfile(
 @pytest.mark.asyncio
 async def test_lifecycle():
     """Node creates and destroys cleanly via async context manager."""
-    async with AsyncioNode("test_lifecycle_node"):
-        pass
+    async with AsyncioNode("test_lifecycle_node") as node:
+        await node.close()
 
 
 @pytest.mark.asyncio
@@ -37,7 +37,6 @@ async def test_subscription_receives_message():
         helper = SyncNode("test_pub_helper")
         pub = helper.create_publisher(String, "/test_sub_topic", TEST_QOS)
 
-        run_task = asyncio.create_task(node.run())
         try:
             await asyncio.sleep(0.5)  # DDS discovery
             pub.publish(String(data="hello"))
@@ -47,6 +46,5 @@ async def test_subscription_receives_message():
 
             assert received_data == ["hello"]
         finally:
-            await node.close()
-            await run_task
             helper.destroy_node()
+            await node.close()
