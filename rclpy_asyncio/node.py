@@ -1,6 +1,7 @@
 import asyncio
 from typing import Optional, List, Union, Any, Dict
 
+from rclpy.executors import await_or_execute
 from rclpy.node import Node
 from rclpy.context import Context
 from rclpy.qos import QoSProfile, qos_profile_rosout_default, qos_profile_services_default
@@ -33,11 +34,6 @@ class AsyncioNode(Node):
         self._tg: Optional[asyncio.TaskGroup] = None
         self._runners: Dict[Entity, asyncio.Task] = {}
 
-        # Disable the type description service — it creates a sync Service
-        # incompatible with the asyncio event loop.
-        overrides = list(parameter_overrides or [])
-        overrides.append(Parameter('start_type_description_service', value=False))
-
         super().__init__(
             node_name = node_name,
             context = context,
@@ -47,7 +43,7 @@ class AsyncioNode(Node):
             enable_rosout = enable_rosout,
             rosout_qos_profile = rosout_qos_profile,
             start_parameter_services = start_parameter_services,
-            parameter_overrides = overrides,
+            parameter_overrides = parameter_overrides,
             allow_undeclared_parameters = allow_undeclared_parameters,
             automatically_declare_parameters_from_overrides = automatically_declare_parameters_from_overrides,
             enable_logger_service = enable_logger_service
@@ -106,7 +102,8 @@ class AsyncioNode(Node):
                     msg_and_info = subscription.handle.take_message(
                         subscription.msg_type, False)
                     if msg_and_info is not None:
-                        tg.create_task(subscription.callback(msg_and_info[0]))
+                        tg.create_task(await_or_execute(
+                            subscription.callback, msg_and_info[0]))
                     else:
                         try:
                             read_event.clear()
@@ -145,7 +142,8 @@ class AsyncioNode(Node):
             service.destroy()
 
     async def _handle_service_request(self, service, request, header):
-        response = await service.callback(request, service.srv_type.Response())
+        response = await await_or_execute(
+            service.callback, request, service.srv_type.Response())
         service.handle.service_send_response(response, header)
 
     async def _run_client(self, client):
