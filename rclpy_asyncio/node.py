@@ -1,7 +1,7 @@
 import asyncio
 from typing import Optional, List, Union, Any, Dict
 
-import _rclpy
+from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from rclpy.node import Node, check_is_valid_msg_type, check_is_valid_srv_type
 from rclpy.context import Context
 from rclpy.qos import QoSProfile, qos_profile_rosout_default, qos_profile_services_default
@@ -33,6 +33,15 @@ class AsyncioNode(Node):
         automatically_declare_parameters_from_overrides: bool = False,
         enable_logger_service: bool = False
     ) -> None:
+        self._tg: Optional[asyncio.TaskGroup] = None
+        self._runners: Dict[AsyncioEntity, asyncio.Task] = {}
+
+        # Disable the type description service — it creates a sync Service
+        # incompatible with the asyncio event loop.
+        # TODO: support the type description service with AsyncioService.
+        overrides = list(parameter_overrides or [])
+        overrides.append(Parameter('start_type_description_service', value=False))
+
         super().__init__(
             node_name = node_name,
             context = context,
@@ -42,18 +51,15 @@ class AsyncioNode(Node):
             enable_rosout = enable_rosout,
             rosout_qos_profile = rosout_qos_profile,
             start_parameter_services = start_parameter_services,
-            parameter_overrides = parameter_overrides,
+            parameter_overrides = overrides,
             allow_undeclared_parameters = allow_undeclared_parameters,
             automatically_declare_parameters_from_overrides = automatically_declare_parameters_from_overrides,
             enable_logger_service = enable_logger_service
         )
 
-        self._tg: Optional[asyncio.TaskGroup] = None
-        self._runners: Dict[AsyncioEntity, asyncio.Task] = {}
-              
     async def __aenter__(self):
         return self
-    
+
     async def __aexit__(self, *_exc):
         await self.close()
 
@@ -62,7 +68,7 @@ class AsyncioNode(Node):
         # Drop extra reference to parameter event publisher.
         # It will be destroyed with other publishers below.
         self._parameter_event_publisher = None
-        
+
         async with asyncio.TaskGroup() as tg:
             for sub in list(self._subscriptions):
                 tg.create_task(self.close_subscription(sub))

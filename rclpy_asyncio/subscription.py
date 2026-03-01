@@ -13,7 +13,7 @@ class AsyncioSubscription(Subscription):
 
     async def __anext__(self):
         while True:
-            msg_and_info = self.handle.take_message(self.msg_type, raw=False)
+            msg_and_info = self.handle.take_message(self.msg_type, False)
             if msg_and_info is not None:
                 return msg_and_info[0]
 

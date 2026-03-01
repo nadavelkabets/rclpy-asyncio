@@ -21,6 +21,7 @@ setup(
     extras_require={
         'test': [
             'pytest',
+            'pytest-asyncio',
         ],
     },
     entry_points={
