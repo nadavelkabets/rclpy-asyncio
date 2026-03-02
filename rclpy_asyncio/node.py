@@ -1,9 +1,11 @@
 import asyncio
 from types import TracebackType
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Type, Union
 
 from rclpy.client import Client
+from rclpy.clock import ClockChange, JumpThreshold
 from rclpy.context import Context
+from rclpy.duration import Duration
 from rclpy.executors import await_or_execute
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -14,6 +16,11 @@ from rclpy.type_support import MsgT, Srv, SrvRequestT, SrvResponseT
 
 
 Entity = Union[Subscription, Service, Client]
+
+
+class TimeSourceChangedError(Exception):
+    """Raised when a sleep is interrupted by a time source change."""
+    pass
 
 
 class AsyncioNode(Node):
@@ -35,6 +42,7 @@ class AsyncioNode(Node):
     ) -> None:
         self._tg: Optional[asyncio.TaskGroup] = None
         self._runners: Dict[Entity, asyncio.Task[None]] = {}
+        self._pending_sleeps: Set[asyncio.Future[None]] = set()
 
         super().__init__(
             node_name = node_name,
@@ -80,6 +88,8 @@ class AsyncioNode(Node):
         self.handle.destroy_when_not_in_use()
 
     async def close(self) -> None:
+        for future in self._pending_sleeps:
+            future.cancel()
         async with asyncio.TaskGroup() as tg:
             for sub in list(self._subscriptions):
                 tg.create_task(self.close_subscription(sub))
@@ -87,6 +97,60 @@ class AsyncioNode(Node):
                 tg.create_task(self.close_service(srv))
             for client in list(self._clients):
                 tg.create_task(self.close_client(client))
+
+    async def sleep(self, duration_sec: float) -> None:
+        """
+        Sleep for a duration respecting sim time.
+
+        Cancelled on close(). Raises TimeSourceChangedError if ROS time is
+        activated or deactivated during the sleep.
+        """
+        if duration_sec <= 0:
+            return
+
+        clock = self._clock
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[None] = loop.create_future()
+        timer_handle = None
+        target = None
+
+        def _resolve() -> None:
+            if not future.done():
+                future.set_result(None)
+
+        def _reject() -> None:
+            if not future.done():
+                future.set_exception(TimeSourceChangedError())
+
+        if clock.ros_time_is_active:
+            target = clock.now() + Duration(nanoseconds=int(duration_sec * 1e9))
+        else:
+            timer_handle = loop.call_later(duration_sec, _resolve)
+
+        def _on_jump(time_jump: Any) -> None:
+            if time_jump.clock_change in (
+                ClockChange.ROS_TIME_ACTIVATED,
+                ClockChange.ROS_TIME_DEACTIVATED,
+            ):
+                loop.call_soon_threadsafe(_reject)
+            elif target is not None and clock.now() >= target:
+                loop.call_soon_threadsafe(_resolve)
+
+        threshold = JumpThreshold(
+            min_forward=Duration(nanoseconds=1),
+            min_backward=None,
+            on_clock_change=True,
+        )
+        jump_handle = clock.create_jump_callback(
+            threshold, post_callback=_on_jump)
+        self._pending_sleeps.add(future)
+        try:
+            await future
+        finally:
+            self._pending_sleeps.discard(future)
+            jump_handle.unregister()
+            if timer_handle is not None:
+                timer_handle.cancel()
 
     # TODO: do we want a concurrent=False flag that awaits the callback?
     # TODO: do we want to utilize asyncio's eager_start on 3.12+?

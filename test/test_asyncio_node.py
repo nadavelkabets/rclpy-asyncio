@@ -5,11 +5,12 @@ import pytest
 import rclpy
 import rclpy.executors
 from rclpy.node import Node as SyncNode
+from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
-from rclpy_asyncio.node import AsyncioNode
+from rclpy_asyncio.node import AsyncioNode, TimeSourceChangedError
 
 TEST_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
@@ -120,3 +121,44 @@ async def test_client_calls_async_service():
             finally:
                 await client_node.close()
         await srv_node.close()
+
+
+@pytest.mark.asyncio
+async def test_sleep_wall_clock():
+    """node.sleep() completes after the requested duration (wall clock)."""
+    async with AsyncioNode("test_sleep_node") as node:
+        try:
+            async with asyncio.timeout(5):
+                await node.sleep(0.1)
+        finally:
+            await node.close()
+
+
+@pytest.mark.asyncio
+async def test_sleep_cancelled_on_close():
+    """Pending sleeps are cancelled when node.close() is called."""
+    async with AsyncioNode("test_sleep_cancel_node") as node:
+        sleep_task = asyncio.ensure_future(node.sleep(999))
+        await asyncio.sleep(0.05)  # let sleep start
+        await node.close()
+        with pytest.raises(asyncio.CancelledError):
+            await sleep_task
+
+
+@pytest.mark.asyncio
+async def test_sleep_raises_on_clock_change():
+    """A wall clock sleep raises TimeSourceChangedError when sim time is activated."""
+    async with AsyncioNode("test_sleep_clock_change_node") as node:
+        try:
+            sleep_task = asyncio.ensure_future(node.sleep(999))
+            await asyncio.sleep(0.05)  # let sleep start
+
+            # Activate sim time — triggers ROS_TIME_ACTIVATED jump callback
+            node.set_parameters([Parameter(
+                "use_sim_time", Parameter.Type.BOOL, True)])
+
+            async with asyncio.timeout(5):
+                with pytest.raises(TimeSourceChangedError):
+                    await sleep_task
+        finally:
+            await node.close()
