@@ -81,11 +81,13 @@ class AsyncioNode(Node):
     ) -> None:
         tg = self._tg
         self._tg = None
-        await tg.__aexit__(exc_type, exc_val, exc_tb)
-        self._context.untrack_node(self)
-        self._parameter_event_publisher = None
-        self._type_description_service.destroy()
-        self.handle.destroy_when_not_in_use()
+        try:
+            await tg.__aexit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._context.untrack_node(self)
+            self._parameter_event_publisher = None
+            self._type_description_service.destroy()
+            self.handle.destroy_when_not_in_use()
 
     async def close(self) -> None:
         for future in self._pending_sleeps:
