@@ -16,15 +16,19 @@ class TopicToService:
     
     async def _on_message(self, msg: Bool) -> None:
         await self._node.sleep(2)
-        await self._client.call(SetBool.Request(data=msg.data))
+        response = await self._client.call(SetBool.Request(data=msg.data))
+        self._node.get_logger().info(
+            f"Service response: success={response.success}, message='{response.message}'")
+
 
 async def main() -> None:
-        async with AsyncioNode("demo_node") as node:
-            TopicToService(node)
-
-if __name__ == "__main__":
     rclpy.init()
     try:
-        asyncio.run(main())
+        async with AsyncioNode("demo_node") as node:
+            TopicToService(node)
     finally:
         rclpy.shutdown()
+
+
+if __name__ == "__main__":
+        asyncio.run(main())
