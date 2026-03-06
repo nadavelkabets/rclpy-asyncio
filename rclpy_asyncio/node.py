@@ -155,6 +155,7 @@ class AsyncioNode(Node):
                 timer_handle.cancel()
 
     # TODO: do we want a concurrent=False flag that awaits the callback?
+    # actually we could achieve this with a max_concurrent semaphore limited to 1
     # TODO: do we want to utilize asyncio's eager_start on 3.12+?
     async def _run_subscription(self, subscription: Subscription[MsgT]) -> None:
         """Node owns the DDS bridge and read loop for subscriptions."""
@@ -166,27 +167,27 @@ class AsyncioNode(Node):
 
         subscription.handle.set_on_new_message_callback(_on_new_message)
         try:
-            async with asyncio.TaskGroup() as tg:
-                while True:
-                    # TODO: share code with executors.py _take_subscription
-                    msg_and_info = subscription.handle.take_message(
-                        subscription.msg_type, subscription.raw)
-                    if msg_and_info is not None:
-                        if subscription._callback_type is Subscription.CallbackType.MessageOnly:
-                            msg_tuple = (msg_and_info[0],)
+            with subscription.handle, subscription:
+                async with asyncio.TaskGroup() as tg:
+                    while True:
+                        # TODO: share code with executors.py _take_subscription
+                        msg_and_info = subscription.handle.take_message(
+                            subscription.msg_type, subscription.raw)
+                        if msg_and_info is not None:
+                            if subscription._callback_type is Subscription.CallbackType.MessageOnly:
+                                msg_tuple = (msg_and_info[0],)
+                            else:
+                                msg_tuple = msg_and_info
+                            tg.create_task(await_or_execute(
+                                subscription.callback, *msg_tuple))
                         else:
-                            msg_tuple = msg_and_info
-                        tg.create_task(await_or_execute(
-                            subscription.callback, *msg_tuple))
-                    else:
-                        try:
-                            read_event.clear()
-                            await read_event.wait()
-                        except asyncio.CancelledError:
-                            break
+                            try:
+                                read_event.clear()
+                                await read_event.wait()
+                            except asyncio.CancelledError:
+                                break
         finally:
             subscription.handle.clear_on_new_message_callback()
-            subscription.destroy()
 
     async def _run_service(self, service: Service[SrvRequestT, SrvResponseT]) -> None:
         """Node owns the DDS bridge and read loop for services."""
@@ -198,23 +199,23 @@ class AsyncioNode(Node):
 
         service.handle.set_on_new_request_callback(_on_new_request)
         try:
-            async with asyncio.TaskGroup() as tg:
-                while True:
-                    # TODO: share code with executors.py _take_service
-                    request_and_header = service.handle.service_take_request(
-                        service.srv_type.Request)
-                    if request_and_header != (None, None):
-                        tg.create_task(self._handle_service_request(
-                            service, request_and_header[0], request_and_header[1]))
-                    else:
-                        try:
-                            read_event.clear()
-                            await read_event.wait()
-                        except asyncio.CancelledError:
-                            break
+            with service.handle, service:
+                async with asyncio.TaskGroup() as tg:
+                    while True:
+                        # TODO: share code with executors.py _take_service
+                        request_and_header = service.handle.service_take_request(
+                            service.srv_type.Request)
+                        if request_and_header != (None, None):
+                            tg.create_task(self._handle_service_request(
+                                service, request_and_header[0], request_and_header[1]))
+                        else:
+                            try:
+                                read_event.clear()
+                                await read_event.wait()
+                            except asyncio.CancelledError:
+                                break
         finally:
             service.handle.clear_on_new_request_callback()
-            service.destroy()
 
     async def _handle_service_request(
         self,
@@ -236,28 +237,28 @@ class AsyncioNode(Node):
 
         client.handle.set_on_new_response_callback(_on_new_response)
         try:
-            while True:
-                # TODO: share code with executors.py _take_client
-                header_and_response = client.handle.take_response(
-                    client.srv_type.Response)
-                if header_and_response != (None, None):
-                    header, response = header_and_response
-                    future = client._pending_requests.get(
-                        header.request_id.sequence_number)
-                    if future is not None:
-                        future.set_result(response)
-                else:
-                    try:
-                        read_event.clear()
-                        await read_event.wait()
-                    except asyncio.CancelledError:
-                        break
+            with client.handle, client:
+                while True:
+                    # TODO: share code with executors.py _take_client
+                    header_and_response = client.handle.take_response(
+                        client.srv_type.Response)
+                    if header_and_response != (None, None):
+                        header, response = header_and_response
+                        future = client._pending_requests.get(
+                            header.request_id.sequence_number)
+                        if future is not None:
+                            future.set_result(response)
+                    else:
+                        try:
+                            read_event.clear()
+                            await read_event.wait()
+                        except asyncio.CancelledError:
+                            break
         finally:
             client.handle.clear_on_new_response_callback()
             for future in client._pending_requests.values():
                 future.cancel()
             client._pending_requests.clear()
-            client.destroy()
 
     def create_subscription(
         self,
