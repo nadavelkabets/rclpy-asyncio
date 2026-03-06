@@ -174,9 +174,9 @@ class AsyncioNode(Node):
         def _on_new_message(_num_waiting):
             loop.call_soon_threadsafe(read_event.set)
 
-        subscription.handle.set_on_new_message_callback(_on_new_message)
-        try:
-            with subscription.handle:
+        with subscription.handle:
+            subscription.handle.set_on_new_message_callback(_on_new_message)
+            try:
                 async with asyncio.TaskGroup() as tg:
                     while True:
                         # TODO: share code with executors.py _take_subscription
@@ -195,9 +195,9 @@ class AsyncioNode(Node):
                                 await read_event.wait()
                             except asyncio.CancelledError:
                                 break
-        finally:
-            subscription.handle.clear_on_new_message_callback()
-            Node.destroy_subscription(self, subscription)
+            finally:
+                subscription.handle.clear_on_new_message_callback()
+                Node.destroy_subscription(self, subscription)
 
     async def _run_service(self, service: Service[SrvRequestT, SrvResponseT]) -> None:
         """Node owns the DDS bridge and read loop for services."""
@@ -207,9 +207,9 @@ class AsyncioNode(Node):
         def _on_new_request(_num_waiting):
             loop.call_soon_threadsafe(read_event.set)
 
-        service.handle.set_on_new_request_callback(_on_new_request)
-        try:
-            with service.handle:
+        with service.handle:
+            service.handle.set_on_new_request_callback(_on_new_request)
+            try:
                 async with asyncio.TaskGroup() as tg:
                     while True:
                         # TODO: share code with executors.py _take_service
@@ -224,9 +224,9 @@ class AsyncioNode(Node):
                                 await read_event.wait()
                             except asyncio.CancelledError:
                                 break
-        finally:
-            service.handle.clear_on_new_request_callback()
-            Node.destroy_service(self, service)
+            finally:
+                service.handle.clear_on_new_request_callback()
+                Node.destroy_service(self, service)
 
     async def _handle_service_request(
         self,
@@ -246,9 +246,9 @@ class AsyncioNode(Node):
         def _on_new_response(_num_waiting):
             loop.call_soon_threadsafe(read_event.set)
 
-        client.handle.set_on_new_response_callback(_on_new_response)
-        try:
-            with client.handle:
+        with client.handle:
+            client.handle.set_on_new_response_callback(_on_new_response)
+            try:
                 while True:
                     # TODO: share code with executors.py _take_client
                     header_and_response = client.handle.take_response(
@@ -265,12 +265,12 @@ class AsyncioNode(Node):
                             await read_event.wait()
                         except asyncio.CancelledError:
                             break
-        finally:
-            client.handle.clear_on_new_response_callback()
-            for future in client._pending_requests.values():
-                future.cancel()
-            client._pending_requests.clear()
-            Node.destroy_client(self, client)
+            finally:
+                client.handle.clear_on_new_response_callback()
+                for future in client._pending_requests.values():
+                    future.cancel()
+                client._pending_requests.clear()
+                Node.destroy_client(self, client)
 
     def create_subscription(
         self,
