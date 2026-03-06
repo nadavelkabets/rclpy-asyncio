@@ -1,15 +1,13 @@
 import asyncio
 from types import TracebackType
-from typing import Any, Callable, Dict, List, Optional, Set, Type, Union
+from typing import Any, Callable, Dict, Optional, Set, Type, Union
 
 from rclpy.client import Client
 from rclpy.clock import ClockChange, JumpThreshold
-from rclpy.context import Context
 from rclpy.duration import Duration
 from rclpy.executors import await_or_execute
 from rclpy.node import Node
-from rclpy.parameter import Parameter
-from rclpy.qos import QoSProfile, qos_profile_rosout_default, qos_profile_services_default
+from rclpy.qos import QoSProfile
 from rclpy.service import Service
 from rclpy.subscription import Subscription, SubscriptionCallbackUnion
 from rclpy.type_support import MsgT, Srv, SrvRequestT, SrvResponseT
@@ -24,40 +22,9 @@ class TimeSourceChangedError(Exception):
 
 
 class AsyncioNode(Node):
-    def __init__(
-        self,
-        node_name: str,
-        *,
-        context: Optional[Context] = None,
-        cli_args: Optional[List[str]] = None,
-        namespace: Optional[str] = None,
-        use_global_arguments: bool = True,
-        enable_rosout: bool = True,
-        rosout_qos_profile: Union[QoSProfile, int] = qos_profile_rosout_default,
-        start_parameter_services: bool = True,
-        parameter_overrides: Optional[List[Parameter[Any]]] = None,
-        allow_undeclared_parameters: bool = False,
-        automatically_declare_parameters_from_overrides: bool = False,
-        enable_logger_service: bool = False
-    ) -> None:
-        self._tg: Optional[asyncio.TaskGroup] = None
-        self._runners: Dict[Entity, asyncio.Task[None]] = {}
-        self._pending_sleeps: Set[asyncio.Future[None]] = set()
-
-        super().__init__(
-            node_name = node_name,
-            context = context,
-            cli_args = cli_args,
-            namespace = namespace,
-            use_global_arguments = use_global_arguments,
-            enable_rosout = enable_rosout,
-            rosout_qos_profile = rosout_qos_profile,
-            start_parameter_services = start_parameter_services,
-            parameter_overrides = parameter_overrides,
-            allow_undeclared_parameters = allow_undeclared_parameters,
-            automatically_declare_parameters_from_overrides = automatically_declare_parameters_from_overrides,
-            enable_logger_service = enable_logger_service
-        )
+    _tg: Optional[asyncio.TaskGroup] = None
+    _runners: Optional[Dict[Entity, asyncio.Task]] = None
+    _pending_sleeps: Optional[Set[asyncio.Future]] = None
 
     def destroy_subscription(self, subscription: Subscription[Any]) -> None:
         raise NotImplementedError("Use node.close_subscription(subscription)")
@@ -72,6 +39,8 @@ class AsyncioNode(Node):
         raise NotImplementedError("Use `async with node` context manager")
 
     async def __aenter__(self) -> 'AsyncioNode':
+        self._runners = {}
+        self._pending_sleeps = set()
         tg = asyncio.TaskGroup()
         self._tg = await tg.__aenter__()
         for sub in list(self.subscriptions):
@@ -93,6 +62,8 @@ class AsyncioNode(Node):
     ) -> None:
         tg = self._tg
         self._tg = None
+        self._runners = None
+        self._pending_sleeps = None
         try:
             await tg.__aexit__(exc_type, exc_val, exc_tb)
         finally:
@@ -116,6 +87,8 @@ class AsyncioNode(Node):
         Cancelled on close(). Raises TimeSourceChangedError if ROS time is
         activated or deactivated during the sleep.
         """
+        if self._pending_sleeps is None:
+            raise RuntimeError("sleep() requires the node context manager to be active")
         if duration_sec <= 0:
             return
 
@@ -326,7 +299,7 @@ class AsyncioNode(Node):
 
     async def close_subscription(self, sub: Subscription[MsgT]) -> None:
         """Stop processing new messages and wait for existing callbacks to complete."""
-        task = self._runners.pop(sub, None)
+        task = self._runners.pop(sub, None) if self._runners is not None else None
         if task is not None:
             task.cancel()
             await task
@@ -335,7 +308,7 @@ class AsyncioNode(Node):
 
     async def close_service(self, srv: Service[SrvRequestT, SrvResponseT]) -> None:
         """Stop processing new requests and wait for existing callbacks to complete."""
-        task = self._runners.pop(srv, None)
+        task = self._runners.pop(srv, None) if self._runners is not None else None
         if task is not None:
             task.cancel()
             await task
@@ -344,7 +317,7 @@ class AsyncioNode(Node):
 
     async def close_client(self, client: Client[SrvRequestT, SrvResponseT]) -> None:
         """Stop allowing new calls and cancel all pending calls."""
-        task = self._runners.pop(client, None)
+        task = self._runners.pop(client, None) if self._runners is not None else None
         if task is not None:
             task.cancel()
             await task
