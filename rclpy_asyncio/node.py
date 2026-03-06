@@ -59,6 +59,18 @@ class AsyncioNode(Node):
             enable_logger_service = enable_logger_service
         )
 
+    def destroy_subscription(self, subscription: Subscription[Any]) -> None:
+        raise NotImplementedError("Use node.close_subscription(subscription)")
+
+    def destroy_service(self, service: Service[Any, Any]) -> None:
+        raise NotImplementedError("Use node.close_service(service)")
+
+    def destroy_client(self, client: Client[Any, Any]) -> None:
+        raise NotImplementedError("Use node.close_client(client)")
+
+    def destroy_node(self) -> None:
+        raise NotImplementedError("Use `async with node` context manager")
+
     async def __aenter__(self) -> 'AsyncioNode':
         tg = asyncio.TaskGroup()
         self._tg = await tg.__aenter__()
@@ -84,7 +96,7 @@ class AsyncioNode(Node):
         try:
             await tg.__aexit__(exc_type, exc_val, exc_tb)
         finally:
-            self.destroy_node()
+            Node.destroy_node(self)
 
     async def close(self) -> None:
         for future in self._pending_sleeps:
@@ -185,7 +197,7 @@ class AsyncioNode(Node):
                                 break
         finally:
             subscription.handle.clear_on_new_message_callback()
-            self.destroy_subscription(subscription)
+            Node.destroy_subscription(self, subscription)
 
     async def _run_service(self, service: Service[SrvRequestT, SrvResponseT]) -> None:
         """Node owns the DDS bridge and read loop for services."""
@@ -214,7 +226,7 @@ class AsyncioNode(Node):
                                 break
         finally:
             service.handle.clear_on_new_request_callback()
-            self.destroy_service(service)
+            Node.destroy_service(self, service)
 
     async def _handle_service_request(
         self,
@@ -258,7 +270,7 @@ class AsyncioNode(Node):
             for future in client._pending_requests.values():
                 future.cancel()
             client._pending_requests.clear()
-            self.destroy_client(client)
+            Node.destroy_client(self, client)
 
     def create_subscription(
         self,
@@ -319,7 +331,7 @@ class AsyncioNode(Node):
             task.cancel()
             await task
         else:
-            self.destroy_subscription(sub)
+            Node.destroy_subscription(self, sub)
 
     async def close_service(self, srv: Service[SrvRequestT, SrvResponseT]) -> None:
         """Stop processing new requests and wait for existing callbacks to complete."""
@@ -328,7 +340,7 @@ class AsyncioNode(Node):
             task.cancel()
             await task
         else:
-            self.destroy_service(srv)
+            Node.destroy_service(self, srv)
 
     async def close_client(self, client: Client[SrvRequestT, SrvResponseT]) -> None:
         """Stop allowing new calls and cancel all pending calls."""
@@ -337,4 +349,4 @@ class AsyncioNode(Node):
             task.cancel()
             await task
         else:
-            self.destroy_client(client)
+            Node.destroy_client(self, client)
